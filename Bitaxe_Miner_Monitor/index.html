@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BitAxe Gamma Monitor</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Courier+Prime:wght@400;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Courier Prime', 'Courier New', monospace;
+            background: #0a0a0a;
+            color: #00cc00;
+            padding: 10px;
+            min-height: 100vh;
+            position: relative;
+            overflow-x: hidden;
+        }
+        
+        /* Animated terminal-style background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                repeating-linear-gradient(
+                    0deg,
+                    transparent,
+                    transparent 2px,
+                    rgba(0, 255, 0, 0.01) 2px,
+                    rgba(0, 255, 0, 0.01) 4px
+                );
+            pointer-events: none;
+            z-index: 0;
+            animation: scanlines 20s linear infinite;
+        }
+        
+        /* Glitch effect overlay */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                linear-gradient(90deg, transparent 50%, rgba(0, 255, 255, 0.008) 50%, transparent 100%),
+                repeating-linear-gradient(
+                    90deg,
+                    transparent,
+                    transparent 98px,
+                    rgba(0, 255, 255, 0.004) 100px
+                );
+            background-size: 200% 100%, 100% 100%;
+            pointer-events: none;
+            z-index: 1;
+            animation: glitch 25s linear infinite;
+            mix-blend-mode: screen;
+        }
+        
+        @keyframes scanlines {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(20px); }
+        }
+        
+        @keyframes glitch {
+            0%, 100% { background-position: 0% 0%, 0% 0%; }
+            50% { background-position: -100% 0%, 0% 0%; }
+        }
+        
+        .container {
+            max-width: 95%;
+            width: 100%;
+            margin: 0 auto;
+            background: rgba(0, 15, 0, 0.9);
+            border: 2px solid #00aa00;
+            border-radius: 0;
+            padding: 25px;
+            box-shadow: 
+                0 0 15px rgba(0, 255, 0, 0.2),
+                inset 0 0 15px rgba(0, 255, 0, 0.05),
+                0 0 30px rgba(0, 255, 255, 0.15);
+            backdrop-filter: blur(5px);
+            position: relative;
+            z-index: 2;
+        }
+        
+        .container::before {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            background: linear-gradient(45deg, #00aa00, #00aaaa, #00aa00);
+            z-index: -1;
+            border-radius: 0;
+            opacity: 0.15;
+            animation: borderGlow 8s ease-in-out infinite;
+        }
+        
+        .container::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(0, 170, 0, 0.5), transparent);
+            animation: scanbeam 8s linear infinite;
+        }
+        
+        @keyframes borderGlow {
+            0%, 100% { opacity: 0.15; filter: blur(5px); }
+            50% { opacity: 0.3; filter: blur(10px); }
+        }
+        
+        @keyframes scanbeam {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(calc(100vw + 100%)); }
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: clamp(2em, 5vw, 3em);
+            font-family: 'Orbitron', monospace;
+            font-weight: 900;
+            color: #00cccc;
+            text-shadow: 
+                0 0 5px #00aaaa,
+                0 0 10px #00aaaa,
+                0 0 15px #00aaaa,
+                2px 2px 0px #00aa00;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            animation: titlePulse 5s ease-in-out infinite;
+            position: relative;
+        }
+        
+        h1::before {
+            content: '>_';
+            position: absolute;
+            left: 10%;
+            color: #00aa00;
+            animation: blink 2s step-end infinite;
+        }
+        
+        h1::after {
+            content: '_';
+            animation: blink 2s step-end infinite;
+        }
+        
+        @keyframes titlePulse {
+            0%, 100% { text-shadow: 0 0 5px #00aaaa, 0 0 10px #00aaaa, 0 0 15px #00aaaa, 2px 2px 0px #00aa00; }
+            50% { text-shadow: 0 0 10px #00aaaa, 0 0 15px #00aaaa, 0 0 20px #00aaaa, 2px 2px 0px #00aa00; }
+        }
+        
+        @keyframes blink {
+            0%, 49% { opacity: 1; }
+            50%, 100% { opacity: 0; }
+        }
+        
+        .status-badge {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 2px solid;
+            font-weight: bold;
+            font-size: clamp(0.9rem, 1.5vw, 1.1rem);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-family: 'Orbitron', monospace;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .status-badge::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            animation: shimmer 8s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+        
+        .status-online {
+            background: rgba(0, 170, 0, 0.1);
+            border-color: #00aa00;
+            color: #00cc00;
+            box-shadow: 
+                0 0 10px rgba(0, 255, 0, 0.2),
+                inset 0 0 10px rgba(0, 255, 0, 0.1);
+        }
+        
+        .status-offline {
+            background: rgba(170, 0, 0, 0.1);
+            border-color: #cc0000;
+            color: #cc0000;
+            box-shadow: 
+                0 0 10px rgba(255, 0, 0, 0.2),
+                inset 0 0 10px rgba(255, 0, 0, 0.1);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(clamp(180px, 15vw, 250px), 1fr));
+            gap: clamp(10px, 1.2vw, 15px);
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: rgba(0, 20, 0, 0.7);
+            border: 1px solid #00aa00;
+            border-radius: 0;
+            padding: clamp(12px, 1.5vw, 18px);
+            position: relative;
+            transition: all 0.3s ease;
+            overflow: hidden;
+            min-height: fit-content;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 3px;
+            height: 100%;
+            background: #00aa00;
+            box-shadow: 0 0 5px #00aa00;
+            transition: height 0.3s ease;
+        }
+        
+        .stat-card:hover {
+            background: rgba(0, 30, 0, 0.85);
+            border-color: #00aaaa;
+            box-shadow: 
+                0 0 15px rgba(0, 255, 0, 0.25),
+                inset 0 0 15px rgba(0, 255, 0, 0.05);
+            transform: translateY(-2px);
+        }
+        
+        .stat-card:hover::before {
+            background: #00aaaa;
+            box-shadow: 0 0 8px #00aaaa;
+            height: 100%;
+            animation: pulse 2.5s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .stat-label {
+            font-size: clamp(0.65rem, 1.2vw, 0.9rem);
+            opacity: 0.9;
+            margin-bottom: 10px;
+            color: #00aaaa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        
+        .stat-value {
+            font-size: clamp(1.1rem, 2.5vw, 1.8rem);
+            font-weight: bold;
+            word-break: break-word;
+            font-family: 'Orbitron', monospace;
+            text-shadow: 0 0 5px currentColor;
+            position: relative;
+            line-height: 1.3;
+        }
+        
+        .stat-value small {
+            font-size: clamp(0.7rem, 1.5vw, 1rem);
+            display: block;
+            margin-top: 4px;
+            opacity: 0.85;
+        }
+        
+        .stat-value::before {
+            content: '>';
+            position: absolute;
+            left: -15px;
+            color: #00aa00;
+            opacity: 0.4;
+        }
+        
+        .stat-value.temp-hot { 
+            color: #cc0066;
+            text-shadow: 0 0 8px #cc0066, 0 0 12px #cc0066;
+        }
+        .stat-value.temp-warm { 
+            color: #cc8800;
+            text-shadow: 0 0 6px #cc8800;
+        }
+        .stat-value.temp-cool { 
+            color: #00cc00;
+            text-shadow: 0 0 6px #00cc00;
+        }
+        .stat-value.hashrate { 
+            color: #00aaaa;
+            text-shadow: 0 0 8px #00aaaa, 0 0 12px #00aaaa;
+            animation: hashPulse 5s ease-in-out infinite;
+        }
+        .stat-value.good { 
+            color: #00cc00;
+            text-shadow: 0 0 6px #00cc00;
+        }
+        .stat-value.bad { 
+            color: #cc0000;
+            text-shadow: 0 0 8px #cc0000, 0 0 12px #cc0000;
+            animation: errorBlink 2.5s ease-in-out infinite;
+        }
+        .stat-value.warning { 
+            color: #cc8800;
+            text-shadow: 0 0 6px #cc8800;
+        }
+        
+        @keyframes hashPulse {
+            0%, 100% { text-shadow: 0 0 8px #00aaaa, 0 0 12px #00aaaa; }
+            50% { text-shadow: 0 0 12px #00aaaa, 0 0 16px #00aaaa, 0 0 20px #00aaaa; }
+        }
+        
+        @keyframes errorBlink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(0, 170, 0, 0.2);
+            opacity: 0.7;
+            font-size: clamp(0.75rem, 1.2vw, 0.9rem);
+            color: #00aaaa;
+            font-family: 'Courier Prime', monospace;
+        }
+        
+        .footer::before {
+            content: '[ ';
+        }
+        
+        .footer::after {
+            content: ' ]';
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            font-size: 1.2em;
+            color: #00ff00;
+            font-family: 'Courier Prime', monospace;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            animation: loadingDots 1.5s steps(4, end) infinite;
+        }
+        
+        @keyframes loadingDots {
+            0%, 20% { content: 'Loading'; }
+            40% { content: 'Loading.'; }
+            60% { content: 'Loading..'; }
+            80%, 100% { content: 'Loading...'; }
+        }
+        
+        /* Terminal cursor effect */
+        .terminal-cursor {
+            display: inline-block;
+            width: 8px;
+            height: 16px;
+            background: #00aa00;
+            animation: blink 2s step-end infinite;
+            vertical-align: middle;
+            margin-left: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>BitAxe Gamma Monitor</h1>
+        <div id="status" class="status-badge status-offline">Connecting<span class="terminal-cursor"></span></div>
+        <div id="stats-container">
+            <div class="loading">Loading statistics...</div>
+        </div>
+        <div class="footer">
+            <div>Last updated: <span id="last-update">--</span></div>
+            <div style="margin-top: 10px;">Auto-refreshing every __REFRESH_INTERVAL__ seconds</div>
+        </div>
+    </div>
+    <script>
+        // Debug: Test if JavaScript is running - this should ALWAYS appear
+        console.log('=== SCRIPT STARTED ===');
+        
+        // Placeholders __REFRESH_INTERVAL__ and __BITAXE_IP__ are replaced by C# server
+        let refreshInterval = __REFRESH_INTERVAL__ * 1000;
+        let bitaxeIp = '__BITAXE_IP__';
+        
+        console.log('Variables set - refreshInterval:', refreshInterval, 'bitaxeIp:', bitaxeIp);
+        
+        async function fetchStats() {
+            try {
+                const response = await fetch('/api/stats');
+                if (!response.ok) throw new Error('Failed to fetch');
+                const data = await response.json();
+                if (data === null || data === undefined) {
+                    throw new Error('No data received from BitAxe');
+                }
+                // Debug: log the actual data received
+                console.log('Received data:', data);
+                console.log('temp:', data.temp, 'fanspeed:', data.fanspeed, 'fanrpm:', data.fanrpm, 'hashRateAvg:', data.hashRateAvg, 'uptimeMs:', data.uptimeMs);
+                updateDisplay(data);
+                document.getElementById('status').className = 'status-badge status-online';
+                document.getElementById('status').innerHTML = '✓ Online - Connected to BitAxe<span class="terminal-cursor"></span>';
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+            } catch (error) {
+                document.getElementById('status').className = 'status-badge status-offline';
+                document.getElementById('status').innerHTML = '✗ Offline - Unable to connect to BitAxe<span class="terminal-cursor"></span>';
+                document.getElementById('stats-container').innerHTML = '<div class="loading">Error: ' + error.message + '<br><small>Check that BitAxe is accessible at http://' + bitaxeIp + '/api/system/info</small></div>';
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+            }
+        }
+        
+        function formatHashrate(hashrate) {
+            if (!hashrate || isNaN(hashrate)) return '0.00 TH/s';
+            // BitAxe API returns hashrate values in GH/s (gigahashes per second)
+            // Values like 1370 GH/s should display as 1.37 TH/s
+            // Convert from GH/s to TH/s by dividing by 1000
+            if (hashrate >= 1000) return (hashrate / 1000).toFixed(2) + ' TH/s';
+            return hashrate.toFixed(2) + ' GH/s';
+        }
+        
+        function formatDifficulty(difficulty) {
+            if (!difficulty || isNaN(difficulty)) return '0';
+            if (difficulty >= 1e12) return (difficulty / 1e12).toFixed(2) + 'T';
+            if (difficulty >= 1e9) return (difficulty / 1e9).toFixed(2) + 'G';
+            if (difficulty >= 1e6) return (difficulty / 1e6).toFixed(2) + 'M';
+            return difficulty.toLocaleString();
+        }
+        
+        function formatUptime(ms) {
+            if (!ms || isNaN(ms)) return '0m';
+            const s = Math.floor(ms / 1000);
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            
+            // If under an hour, show only minutes
+            if (h < 1) {
+                return m + 'm';
+            }
+            // If an hour or more, show hours and minutes
+            return h + 'h ' + m + 'm';
+        }
+        
+        function getTempClass(temp) {
+            if (!temp || isNaN(temp)) return 'temp-cool';
+            if (temp > 65) return 'temp-hot';
+            if (temp > 55) return 'temp-warm';
+            return 'temp-cool';
+        }
+        
+        function safeValue(value, defaultValue, isFloat) {
+            if (value === null || value === undefined || isNaN(value)) return defaultValue;
+            return value;
+        }
+        
+        function safeString(value, defaultValue) {
+            if (!value || value === '') return defaultValue || 'N/A';
+            return value;
+        }
+        
+        function updateDisplay(data) {
+            if (!data) return;
+            
+            // Direct property access with fallbacks - no safeValue wrapper to avoid issues
+            const temp = (data.temp !== null && data.temp !== undefined && !isNaN(data.temp)) ? data.temp : 0;
+            const fanRpm = (data.fanrpm !== null && data.fanrpm !== undefined && !isNaN(data.fanrpm)) ? data.fanrpm : 0;
+            const fanPercentage = (data.fanspeed !== null && data.fanspeed !== undefined && !isNaN(data.fanspeed)) ? data.fanspeed : 0;
+            const hashRate = (data.hashRate !== null && data.hashRate !== undefined && !isNaN(data.hashRate)) ? data.hashRate : 0;
+            const hashRateAvg = (data.hashRateAvg !== null && data.hashRateAvg !== undefined && !isNaN(data.hashRateAvg)) ? data.hashRateAvg : 0;
+            const sharesAccepted = (data.sharesAccepted !== null && data.sharesAccepted !== undefined && !isNaN(data.sharesAccepted)) ? data.sharesAccepted : 0;
+            const sharesRejected = (data.sharesRejected !== null && data.sharesRejected !== undefined && !isNaN(data.sharesRejected)) ? data.sharesRejected : 0;
+            const bestDiff = (data.bestDiff !== null && data.bestDiff !== undefined && !isNaN(data.bestDiff)) ? data.bestDiff : 0;
+            const power = (data.power !== null && data.power !== undefined && !isNaN(data.power)) ? data.power : 0;
+            const voltage = (data.voltage !== null && data.voltage !== undefined && !isNaN(data.voltage)) ? data.voltage : 0;
+            // Use uptimeSeconds if uptimeMs is 0 or missing, convert to milliseconds
+            const uptimeMs = (data.uptimeMs && data.uptimeMs > 0) 
+                ? data.uptimeMs 
+                : ((data.uptimeSeconds !== null && data.uptimeSeconds !== undefined && !isNaN(data.uptimeSeconds)) ? data.uptimeSeconds * 1000 : 0);
+            
+            // Debug logging
+            console.log('Raw data - temp:', data.temp, 'fanrpm:', data.fanrpm, 'fanspeed:', data.fanspeed, 'uptimeSeconds:', data.uptimeSeconds);
+            console.log('Parsed values - temp:', temp, 'fanRpm:', fanRpm, 'fanPercentage:', fanPercentage, 'uptimeMs:', uptimeMs);
+            
+            const stratumURL = safeString(data.stratumURL);
+            const stratumUser = safeString(data.stratumUser);
+            const hostname = safeString(data.hostname);
+            const version = safeString(data.version);
+            
+            const totalShares = sharesAccepted + sharesRejected;
+            const rejectionRate = totalShares > 0 ? (sharesRejected / totalShares * 100) : 0;
+            const rejectionClass = rejectionRate > 5 ? 'bad' : (rejectionRate > 2 ? 'warning' : 'good');
+            const poolStatus = stratumUser !== 'N/A' ? 'Connected' : 'Disconnected';
+            const poolClass = stratumUser !== 'N/A' ? 'good' : 'bad';
+            
+            // Parse additional metrics
+            const vrTemp = (data.vrTemp !== null && data.vrTemp !== undefined && !isNaN(data.vrTemp)) ? data.vrTemp : 0;
+            const current = (data.current !== null && data.current !== undefined && !isNaN(data.current)) ? data.current : 0;
+            const maxPower = (data.maxPower !== null && data.maxPower !== undefined && !isNaN(data.maxPower)) ? data.maxPower : 0;
+            const errorPercentage = (data.errorPercentage !== null && data.errorPercentage !== undefined && !isNaN(data.errorPercentage)) ? data.errorPercentage : 0;
+            const bestSessionDiff = (data.bestSessionDiff !== null && data.bestSessionDiff !== undefined && !isNaN(data.bestSessionDiff)) ? data.bestSessionDiff : 0;
+            const poolDifficulty = (data.poolDifficulty !== null && data.poolDifficulty !== undefined && !isNaN(data.poolDifficulty)) ? data.poolDifficulty : 0;
+            const networkDifficulty = (data.networkDifficulty !== null && data.networkDifficulty !== undefined && !isNaN(data.networkDifficulty)) ? data.networkDifficulty : 0;
+            const coreVoltage = (data.coreVoltage !== null && data.coreVoltage !== undefined && !isNaN(data.coreVoltage)) ? data.coreVoltage : 0;
+            const coreVoltageActual = (data.coreVoltageActual !== null && data.coreVoltageActual !== undefined && !isNaN(data.coreVoltageActual)) ? data.coreVoltageActual : 0;
+            const frequency = (data.frequency !== null && data.frequency !== undefined && !isNaN(data.frequency)) ? data.frequency : 0;
+            const wifiRSSI = (data.wifiRSSI !== null && data.wifiRSSI !== undefined && !isNaN(data.wifiRSSI)) ? data.wifiRSSI : 0;
+            const responseTime = (data.responseTime !== null && data.responseTime !== undefined && !isNaN(data.responseTime)) ? data.responseTime : 0;
+            const smallCoreCount = (data.smallCoreCount !== null && data.smallCoreCount !== undefined && !isNaN(data.smallCoreCount)) ? data.smallCoreCount : 0;
+            const blockHeight = (data.blockHeight !== null && data.blockHeight !== undefined && !isNaN(data.blockHeight)) ? data.blockHeight : 0;
+            const blockFound = (data.blockFound !== null && data.blockFound !== undefined) ? data.blockFound : 0;
+            const overclockEnabled = (data.overclockEnabled !== null && data.overclockEnabled !== undefined) ? data.overclockEnabled : 0;
+            const overheatMode = (data.overheatMode !== null && data.overheatMode !== undefined) ? data.overheatMode : 0;
+            const freeHeap = (data.freeHeap !== null && data.freeHeap !== undefined && !isNaN(data.freeHeap)) ? data.freeHeap : 0;
+            const freeHeapInternal = (data.freeHeapInternal !== null && data.freeHeapInternal !== undefined && !isNaN(data.freeHeapInternal)) ? data.freeHeapInternal : 0;
+            const freeHeapSpiram = (data.freeHeapSpiram !== null && data.freeHeapSpiram !== undefined && !isNaN(data.freeHeapSpiram)) ? data.freeHeapSpiram : 0;
+            
+            const asicModel = safeString(data.ASICModel || data.asicModel);
+            const macAddr = safeString(data.macAddr);
+            const ipv4 = safeString(data.ipv4);
+            const wifiStatus = safeString(data.wifiStatus);
+            const ssid = safeString(data.ssid);
+            const boardVersion = safeString(data.boardVersion);
+            const axeOSVersion = safeString(data.axeOSVersion);
+            const idfVersion = safeString(data.idfVersion);
+            const display = safeString(data.display);
+            const fallbackStratumURL = safeString(data.fallbackStratumURL);
+            const fallbackStratumUser = safeString(data.fallbackStratumUser);
+            
+            const html = '<div class="stats-grid">' +
+                // Row 1: Temperature, VR Temperature, Current Hashrate, Expected Hashrate, Session Best Diff, Best Difficulty
+                '<div class="stat-card"><div class="stat-label">Temperature</div><div class="stat-value ' + getTempClass(temp) + '">' + temp.toFixed(1) + '°C</div></div>' +
+                '<div class="stat-card"><div class="stat-label">VR Temperature</div><div class="stat-value ' + getTempClass(vrTemp) + '">' + vrTemp.toFixed(1) + '°C</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Current Hashrate</div><div class="stat-value hashrate">' + formatHashrate(hashRate) + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Expected Hashrate</div><div class="stat-value hashrate">' + formatHashrate(hashRateAvg) + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Session Best Diff</div><div class="stat-value">' + formatDifficulty(bestSessionDiff) + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Best Difficulty</div><div class="stat-value">' + formatDifficulty(bestDiff) + '</div></div>' +
+                // Row 2: Power, Voltage, Current, Core Voltage, Frequency, Overclock
+                '<div class="stat-card"><div class="stat-label">Power</div><div class="stat-value">' + power.toFixed(2) + ' W<br><small>Max: ' + maxPower.toFixed(0) + ' W</small></div></div>' +
+                '<div class="stat-card"><div class="stat-label">Voltage</div><div class="stat-value">' + (voltage / 1000).toFixed(2) + ' V</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Current</div><div class="stat-value">' + (current / 1000).toFixed(2) + ' A</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Core Voltage</div><div class="stat-value">' + (coreVoltage / 1000).toFixed(3) + ' V<br><small>Actual: ' + (coreVoltageActual / 1000).toFixed(3) + ' V</small></div></div>' +
+                '<div class="stat-card"><div class="stat-label">Frequency</div><div class="stat-value">' + frequency + ' MHz</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Overclock</div><div class="stat-value ' + (overclockEnabled ? 'good' : 'warning') + '">' + (overclockEnabled ? 'Enabled' : 'Disabled') + '</div></div>' +
+                // Row 3: Accepted Shares, Rejected Shares, Rejection Rate, Error rate, Uptime, Network Difficulty
+                '<div class="stat-card"><div class="stat-label">Accepted Shares</div><div class="stat-value good">' + sharesAccepted.toLocaleString() + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Rejected Shares</div><div class="stat-value ' + (sharesRejected > 0 ? 'bad' : 'good') + '">' + sharesRejected.toLocaleString() + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Rejection Rate</div><div class="stat-value ' + rejectionClass + '">' + rejectionRate.toFixed(2) + '%</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Error Rate</div><div class="stat-value ' + (errorPercentage > 1 ? 'bad' : 'good') + '">' + errorPercentage.toFixed(2) + '%</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Uptime</div><div class="stat-value">' + formatUptime(uptimeMs) + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Network Difficulty</div><div class="stat-value">' + formatHashrate(networkDifficulty) + '</div></div>' +
+                // Row 4: Pool URL, Pool Status, Response Time, Pool Difficulty, Pool User, Block Height
+                '<div class="stat-card"><div class="stat-label">Pool URL</div><div class="stat-value" style="font-size: 0.9em;">' + stratumURL + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Pool Status</div><div class="stat-value ' + poolClass + '">' + poolStatus + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Response Time</div><div class="stat-value">' + responseTime.toFixed(2) + ' ms</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Pool Difficulty</div><div class="stat-value">' + poolDifficulty.toLocaleString() + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Pool User</div><div class="stat-value" style="font-size: 0.85em;">' + stratumUser + '</div></div>' +
+                '<div class="stat-card"><div class="stat-label">Block Height</div><div class="stat-value">' + blockHeight.toLocaleString() + '</div></div>' +
+                // Row 5: Wi-Fi Status, Fan Speed, Blocks Found
+                '<div class="stat-card"><div class="stat-label">Wi-Fi Status</div><div class="stat-value ' + (wifiStatus === 'Connected!' ? 'good' : 'bad') + '">' + wifiStatus + '<br><small>RSSI: ' + wifiRSSI + ' dBm</small></div></div>' +
+                '<div class="stat-card"><div class="stat-label">Fan Speed</div><div class="stat-value">' + fanRpm + ' RPM<br><small>' + fanPercentage + '%</small></div></div>' +
+                '<div class="stat-card"><div class="stat-label">Blocks Found</div><div class="stat-value ' + (blockFound > 0 ? 'good' : '') + '">' + blockFound + '</div></div>' +
+                '</div>';
+            document.getElementById('stats-container').innerHTML = html;
+        }
+        
+        fetchStats();
+        setInterval(fetchStats, refreshInterval);
+    </script>
+</body>
+</html>
+
