@@ -179,11 +179,63 @@ namespace Bitaxe_Miner_Monitor
                     response.StatusCode = 200;
                     await response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
                 }
+                else if (path.StartsWith("/images/") || path.EndsWith(".jpg") || path.EndsWith(".jpeg") || path.EndsWith(".png") || path.EndsWith(".gif"))
+                {
+                    // Serve image files
+                    try
+                    {
+                        string imagePath = path.TrimStart('/');
+                        string[] possiblePaths = {
+                            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, imagePath),
+                            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", imagePath),
+                            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", imagePath),
+                            imagePath
+                        };
+                        
+                        string fullPath = null;
+                        foreach (string possiblePath in possiblePaths)
+                        {
+                            string fullPossiblePath = Path.GetFullPath(possiblePath);
+                            if (File.Exists(fullPossiblePath))
+                            {
+                                fullPath = fullPossiblePath;
+                                break;
+                            }
+                        }
+                        
+                        if (fullPath != null && File.Exists(fullPath))
+                        {
+                            byte[] imageBytes = File.ReadAllBytes(fullPath);
+                            response.ContentLength64 = imageBytes.Length;
+                            
+                            // Set content type based on file extension
+                            if (path.EndsWith(".jpg") || path.EndsWith(".jpeg"))
+                                response.ContentType = "image/jpeg";
+                            else if (path.EndsWith(".png"))
+                                response.ContentType = "image/png";
+                            else if (path.EndsWith(".gif"))
+                                response.ContentType = "image/gif";
+                            else
+                                response.ContentType = "image/jpeg"; // Default
+                            
+                            response.StatusCode = 200;
+                            await response.OutputStream.WriteAsync(imageBytes, 0, imageBytes.Length);
+                        }
+                        else
+                        {
+                            response.StatusCode = 404;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ERROR] Failed to serve image: {ex.Message}");
+                        response.StatusCode = 500;
+                    }
+                }
                 else if (path == "/api/stats")
                 {
                     try
                     {
-                        Console.WriteLine($"[DEBUG] Received /api/stats request");
                         // Serve JSON stats
                         response.ContentType = "application/json; charset=utf-8";
                         // Prevent caching
@@ -191,10 +243,7 @@ namespace Bitaxe_Miner_Monitor
                         response.AddHeader("Pragma", "no-cache");
                         response.AddHeader("Expires", "0");
                         
-                        Console.WriteLine($"[DEBUG] Fetching stats from BitAxe at http://{bitaxeIp}/api/system/info");
                         var stats = await GetSystemInfo();
-                        
-                        Console.WriteLine($"[DEBUG] GetSystemInfo returned: {(stats == null ? "null" : "valid object")}");
                         
                         var options = new JsonSerializerOptions
                         {
@@ -220,13 +269,10 @@ namespace Bitaxe_Miner_Monitor
                                 SaveDataPointToSql(stats);
                                 
                                 json = JsonSerializer.Serialize(stats, options);
-                                Console.WriteLine($"[DEBUG] Stats serialized successfully. Length: {json.Length} chars");
-                                Console.WriteLine($"[DEBUG] Temperature: {stats.Temperature}, FanSpeed: {stats.FanSpeed}, FanRpm: {stats.FanRpm}, HashRateAvg: {stats.HashRateAvg}, ExpectedHashrate: {stats.ExpectedHashrate}, UptimeMs: {stats.UptimeMs}");
                             }
                             else
                             {
                                 json = "null";
-                                Console.WriteLine($"[DEBUG] Stats is null - BitAxe may be unreachable");
                             }
                         }
                         catch (Exception serializeEx)
@@ -242,7 +288,6 @@ namespace Bitaxe_Miner_Monitor
                             response.ContentLength64 = buffer.Length;
                             response.StatusCode = 200;
                             await response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
-                            Console.WriteLine($"[DEBUG] Response sent successfully ({buffer.Length} bytes)");
                         }
                         catch (Exception writeEx)
                         {
@@ -415,7 +460,8 @@ setInterval(fetchStats, refreshInterval);
                 {
                         PropertyNameCaseInsensitive = true,
                         AllowTrailingCommas = true, // Allow trailing commas in JSON
-                        ReadCommentHandling = JsonCommentHandling.Skip // Skip comments if any
+                        ReadCommentHandling = JsonCommentHandling.Skip, // Skip comments if any
+                        NumberHandling = JsonNumberHandling.AllowReadingFromString // Allow numbers to be read from strings (e.g., "fanspeed": "100")
                 };
                     
                 return JsonSerializer.Deserialize<BitaxeStats>(response, options);
@@ -938,7 +984,7 @@ setInterval(fetchStats, refreshInterval);
         public string Hostname { get; set; } = "";
 
         [JsonPropertyName("fanspeed")]
-        public int FanSpeed { get; set; }
+        public int? FanSpeed { get; set; }
 
         [JsonPropertyName("fanrpm")]
         public int FanRpm { get; set; }

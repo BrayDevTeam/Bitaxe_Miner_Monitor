@@ -88,13 +88,30 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="images\cards\blocks-found\background.jpg" />
+    <Content Include="images\cards\blocks-found\hundred-dollar-bill.jpg" />
+    <Content Include="images\cards\hashrate\background.jpg" />
+    <Content Include="images\cards\hashrate\hundred-dollar-bill.jpg" />
+    <Content Include="images\cards\power\background.jpg" />
+    <Content Include="images\cards\power\hundred-dollar-bill.jpg" />
+    <Content Include="images\cards\temperature\background.jpg" />
+    <Content Include="images\cards\temperature\hundred-dollar-bill.jpg" />
+    <Content Include="images\cards\vr-temperature\background.jpg" />
+    <Content Include="images\cards\vr-temperature\hundred-dollar-bill.jpg" />
     <Content Include="SQL\DatabaseSetup.sql" />
     <None Include="App.config" />
+    <None Include="images\README.md" />
     <None Include="packages.config" />
     <Content Include="index.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <None Include="SQL\README.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="images\cards\info\" />
+    <Folder Include="images\charts\hashrate\" />
+    <Folder Include="images\charts\temperature\" />
+    <Folder Include="images\charts\vr-temperature\" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.targets\ImportAfter\*.targets" Condition="'$(ImportByWildcardAfterMicrosoftCommonTargets)' == 'true' and exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.targets\ImportAfter')" />
