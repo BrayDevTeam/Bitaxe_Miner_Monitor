@@ -8,9 +8,11 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Text.Json.Serialization;
 
@@ -20,11 +22,12 @@ namespace Bitaxe_Miner_Monitor
     {
         private static readonly HttpClient client = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(10) // 10 second timeout
+            Timeout = TimeSpan.FromSeconds(30) // 30 second timeout - increased for slower connections
         };
         private static HttpClient avalonClient = null; // Separate client for Avalon Nano with cookie support
-        private static string bitaxeIp = "192.168.0.196"; // REPLACE IP HERE
-        private static string avalonNanoIp = "192.168.0.192"; // REPLACE IP HERE
+        private static string bitaxeIp = "192.168.0.195"; // REPLACE IP HERE
+        private static int bitaxePort = 80; // BitAxe HTTP port (default 80, try 8080 or 8000 if 80 doesn't work)
+        private static string avalonNanoIp = "192.168.0.191"; // REPLACE IP HERE
         private static string avalonAuthCookie = "9e68bc1137fb1b797af81412f2e9c8f3"; // Auth cookie for Avalon Nano
         private static int refreshInterval = 5; // seconds
         private static HttpListener listener;
@@ -39,11 +42,16 @@ namespace Bitaxe_Miner_Monitor
         // Keep ALL values for the entire session to match webpage calculation exactly
         private static readonly List<double> nano3SHashrateValues = new List<double>();
         private static readonly object nano3SHashrateLock = new object(); // Lock for thread-safe access
+        
+        // Best difficulty tracking for Nano 3S (persisted across sessions)
+        private static double nano3SBestDifficulty = 328250000.0; // Default: 328.25M
+        private static readonly object nano3SBestDifficultyLock = new object(); // Lock for thread-safe access
+        private static string nano3SBestDifficultyConfigFile = null; // Path to config file
 
         static async Task Main(string[] args)
         {
             // Parse command line arguments
-            // Usage: Bitaxe_Miner_Monitor.exe [BITAXE_IP] [REFRESH_INTERVAL] [WEB_PORT] [AVALON_IP] [AVALON_AUTH_COOKIE]
+            // Usage: Bitaxe_Miner_Monitor.exe [BITAXE_IP] [REFRESH_INTERVAL] [WEB_PORT] [AVALON_IP] [AVALON_AUTH_COOKIE] [BITAXE_PORT]
             if (args.Length > 0)
             {
                 bitaxeIp = args[0];
@@ -69,10 +77,15 @@ namespace Bitaxe_Miner_Monitor
                 avalonAuthCookie = args[4];
             }
 
+            if (args.Length > 5 && int.TryParse(args[5], out int bitaxePortArg) && bitaxePortArg > 0 && bitaxePortArg < 65536)
+            {
+                bitaxePort = bitaxePortArg;
+            }
+
             Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
             Console.WriteLine("║              BITAXE GAMMA WEB MONITOR                        ║");
             Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
-            Console.WriteLine($"BitAxe IP: {bitaxeIp}");
+            Console.WriteLine($"BitAxe IP: {bitaxeIp}:{bitaxePort}");
             Console.WriteLine($"Avalon Nano 3S IP: {avalonNanoIp} (TCP port 4028)");
             Console.WriteLine($"Web server: http://localhost:{webPort}");
             Console.WriteLine($"Refresh interval: {refreshInterval} seconds");
@@ -82,6 +95,9 @@ namespace Bitaxe_Miner_Monitor
             
             // Initialize session data file
             InitializeSessionDataFile();
+            
+            // Initialize Nano 3S best difficulty tracking
+            InitializeNano3SBestDifficulty();
             
             // Initialize SQL Server connection (non-blocking, errors won't stop startup)
             try
@@ -275,7 +291,13 @@ namespace Bitaxe_Miner_Monitor
                         }
                         catch (Exception avalonEx)
                         {
-                            // Error handled gracefully - return null without logging to reduce console noise
+                            // Log error to help debug
+                            Console.WriteLine($"[ERROR] Exception in GetAvalonNanoStats: {avalonEx.Message}");
+                            Console.WriteLine($"[ERROR] Stack trace: {avalonEx.StackTrace}");
+                            if (avalonEx.InnerException != null)
+                            {
+                                Console.WriteLine($"[ERROR] Inner exception: {avalonEx.InnerException.Message}");
+                            }
                             stats = null;
                         }
                         
@@ -543,82 +565,424 @@ setInterval(fetchStats, refreshInterval);
             Console.WriteLine($"✓ Avalon Nano will use TCP socket API on port 4028");
         }
 
-        static async Task<BitaxeStats> GetSystemInfo()
+        // Send HTTP request to BitAxe via TCP socket (like Nano3S uses TCP)
+        static async Task<string> SendBitAxeHttpRequest(string path)
         {
+            TcpClient tcpClient = null;
+            NetworkStream stream = null;
             try
             {
-                using (var httpResponse = await client.GetAsync($"http://{bitaxeIp}/api/system/info"))
+                // Connect to BitAxe on configured port
+                tcpClient = new TcpClient();
+                tcpClient.ReceiveTimeout = 5000;
+                tcpClient.SendTimeout = 5000;
+                await tcpClient.ConnectAsync(bitaxeIp, bitaxePort);
+                
+                if (!tcpClient.Connected)
                 {
-                    // Check if response is successful
-                    if (!httpResponse.IsSuccessStatusCode)
-                    {
-                        Console.WriteLine($"[WARNING] BitAxe API returned status code: {(int)httpResponse.StatusCode} {httpResponse.ReasonPhrase}");
-                        return null;
-                    }
-                    
-                    var response = await httpResponse.Content.ReadAsStringAsync();
-                    
-                    // Validate response is not empty or null
-                    if (string.IsNullOrWhiteSpace(response))
-                    {
-                        Console.WriteLine($"[WARNING] BitAxe API returned empty response");
-                        return null;
-                    }
-                    
-                    // Check if response looks like valid JSON (starts with { and ends with })
-                    response = response.Trim();
-                    if (!response.StartsWith("{") || !response.EndsWith("}"))
-                    {
-                        Console.WriteLine($"[WARNING] BitAxe API returned invalid JSON format. Response length: {response.Length}");
-                        Console.WriteLine($"[WARNING] Response preview: {response.Substring(0, Math.Min(100, response.Length))}...");
-                        return null;
-                    }
-                    
-                var options = new JsonSerializerOptions
-                {
-                        PropertyNameCaseInsensitive = true,
-                        AllowTrailingCommas = true, // Allow trailing commas in JSON
-                        ReadCommentHandling = JsonCommentHandling.Skip, // Skip comments if any
-                        NumberHandling = JsonNumberHandling.AllowReadingFromString // Allow numbers to be read from strings (e.g., "fanspeed": "100")
-                };
-                    
-                return JsonSerializer.Deserialize<BitaxeStats>(response, options);
-            }
-            }
-            catch (HttpRequestException ex)
-            {
-                Console.WriteLine($"[ERROR] HttpRequestException in GetSystemInfo: {ex.Message}");
-                return null;
-            }
-            catch (TaskCanceledException ex)
-            {
-                // Check if it's a timeout or cancellation
-                if (ex.InnerException is TimeoutException)
-                {
-                    Console.WriteLine($"[ERROR] Request timeout in GetSystemInfo: BitAxe at {bitaxeIp} did not respond within 10 seconds");
-                    Console.WriteLine($"[ERROR] Check if BitAxe is online and accessible at http://{bitaxeIp}/api/system/info");
+                    return null;
                 }
-                else
+                
+                stream = tcpClient.GetStream();
+                stream.ReadTimeout = 5000;
+                stream.WriteTimeout = 5000;
+                
+                // Build HTTP GET request manually
+                // Try with multiple User-Agent strings - some devices are picky
+                string hostHeader = bitaxePort == 80 ? bitaxeIp : $"{bitaxeIp}:{bitaxePort}";
+                string httpRequest = $"GET {path} HTTP/1.1\r\n" +
+                                     $"Host: {hostHeader}\r\n" +
+                                     $"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n" +
+                                     $"Accept: application/json, */*\r\n" +
+                                     $"Accept-Language: en-US,en;q=0.9\r\n" +
+                                     $"Connection: close\r\n" +
+                                     $"\r\n";
+                
+                // Send HTTP request
+                byte[] requestBytes = Encoding.ASCII.GetBytes(httpRequest);
+                await stream.WriteAsync(requestBytes, 0, requestBytes.Length);
+                await stream.FlushAsync();
+                
+                // Read HTTP response
+                StringBuilder responseBuilder = new StringBuilder();
+                byte[] buffer = new byte[4096];
+                int totalBytesRead = 0;
+                int maxBytes = 16384; // Max response size
+                DateTime startTime = DateTime.Now;
+                TimeSpan timeout = TimeSpan.FromSeconds(5);
+                
+                // Read until we get complete response or timeout
+                while (totalBytesRead < maxBytes && (DateTime.Now - startTime) < timeout)
                 {
-                    Console.WriteLine($"[ERROR] TaskCanceledException in GetSystemInfo: {ex.Message}");
-                    Console.WriteLine($"[ERROR] BitAxe may be unreachable at {bitaxeIp}");
+                    if (!stream.DataAvailable)
+                    {
+                        await Task.Delay(50);
+                        if (!stream.DataAvailable && totalBytesRead > 0)
+                        {
+                            break;
+                        }
+                        if (!stream.DataAvailable && totalBytesRead == 0)
+                        {
+                            continue;
+                        }
+                    }
+                    
+                    int bytesRead = await stream.ReadAsync(buffer, 0, Math.Min(buffer.Length, maxBytes - totalBytesRead));
+                    if (bytesRead == 0)
+                    {
+                        break;
+                    }
+                    
+                    string chunk = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                    responseBuilder.Append(chunk);
+                    totalBytesRead += bytesRead;
+                    
+                    // Check if we have complete HTTP response (ends with \r\n\r\n or connection closed)
+                    string currentResponse = responseBuilder.ToString();
+                    if (currentResponse.Contains("\r\n\r\n") && totalBytesRead > 100)
+                    {
+                        // Give it a moment for any remaining data
+                        await Task.Delay(100);
+                        if (!stream.DataAvailable)
+                        {
+                            break;
+                        }
+                    }
                 }
-                return null;
+                
+                string fullResponse = responseBuilder.ToString();
+                
+                // Parse HTTP response - extract JSON body
+                if (fullResponse.Contains("\r\n\r\n"))
+                {
+                    int bodyStart = fullResponse.IndexOf("\r\n\r\n") + 4;
+                    string httpHeaders = fullResponse.Substring(0, bodyStart);
+                    string jsonBody = fullResponse.Substring(bodyStart).Trim();
+                    
+                    // Check HTTP status code
+                    if (httpHeaders.StartsWith("HTTP/1."))
+                    {
+                        string[] firstLine = httpHeaders.Split('\n')[0].Split(' ');
+                        if (firstLine.Length > 1 && int.TryParse(firstLine[1], out int statusCode))
+                        {
+                            if (statusCode != 200)
+                            {
+                                Console.WriteLine($"[WARNING] BitAxe returned HTTP {statusCode}");
+                                return null;
+                            }
+                        }
+                    }
+                    
+                    return jsonBody;
+                }
+                
+                return fullResponse.Trim();
             }
-            catch (JsonException ex)
+            catch (SocketException ex)
             {
-                Console.WriteLine($"[ERROR] JsonException in GetSystemInfo: {ex.Message}");
-                Console.WriteLine($"[ERROR] JSON path: {ex.Path ?? "N/A"}, Line: {ex.LineNumber}, Position: {ex.BytePositionInLine}");
+                // Silently fail - connection issues are expected if device is unreachable
                 return null;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERROR] Unexpected exception in GetSystemInfo: {ex.GetType().Name} - {ex.Message}");
-                if (ex.InnerException != null)
-                {
-                    Console.WriteLine($"[ERROR] Inner exception: {ex.InnerException.GetType().Name} - {ex.InnerException.Message}");
-                }
+                // Silently fail - don't spam console with errors
                 return null;
+            }
+            finally
+            {
+                try
+                {
+                    stream?.Close();
+                    tcpClient?.Close();
+                }
+                catch { }
+            }
+        }
+
+        static async Task<BitaxeStats> GetSystemInfo()
+        {
+            // Use TCP socket instead of HttpClient (like Nano3S does)
+            string jsonResponse = await SendBitAxeHttpRequest("/api/system/info");
+            
+            if (string.IsNullOrWhiteSpace(jsonResponse))
+            {
+                return null;
+            }
+            
+            // Validate response is JSON
+            jsonResponse = jsonResponse.Trim();
+            if (!jsonResponse.StartsWith("{") || !jsonResponse.EndsWith("}"))
+            {
+                return null;
+            }
+            
+            try
+            {
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    AllowTrailingCommas = true,
+                    ReadCommentHandling = JsonCommentHandling.Skip,
+                    NumberHandling = JsonNumberHandling.AllowReadingFromString
+                };
+                
+                return JsonSerializer.Deserialize<BitaxeStats>(jsonResponse, options);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        static async Task TestBitAxeConnectivity()
+        {
+            // Try common ports - web servers often use these
+            int[] commonPorts = { bitaxePort, 80, 8080, 8000, 8888, 8443, 443, 3000, 5000, 9000 };
+            Console.WriteLine($"[TEST] Testing connectivity to BitAxe at {bitaxeIp}...");
+            Console.WriteLine($"[TEST] Configured port: {bitaxePort}");
+            
+            // First, try basic ping test (ICMP)
+            Console.Write($"[TEST] Testing basic network connectivity (ping)... ");
+            try
+            {
+                using (var ping = new Ping())
+                {
+                    var reply = await ping.SendPingAsync(bitaxeIp, 2000);
+                    if (reply.Status == IPStatus.Success)
+                    {
+                        Console.WriteLine($"✓ Device is reachable (response time: {reply.RoundtripTime}ms)");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"✗ Ping failed: {reply.Status}");
+                        Console.WriteLine($"[TEST] ⚠ Device may not be reachable from this PC");
+                        Console.WriteLine($"[TEST] ⚠ Check if PC and BitAxe are on the same network");
+                        Console.WriteLine($"[TEST] ⚠ Windows Firewall may be blocking ICMP");
+                    }
+                }
+            }
+            catch (Exception pingEx)
+            {
+                Console.WriteLine($"✗ Ping test failed: {pingEx.Message}");
+                Console.WriteLine($"[TEST] ⚠ Note: Some firewalls block ping, but device may still be reachable");
+            }
+            
+            Console.WriteLine($"[TEST] Scanning for open ports...");
+            List<int> openPorts = new List<int>();
+            
+            // Test TCP connectivity on common ports
+            foreach (int port in commonPorts.Distinct())
+            {
+                Console.Write($"[TEST] Testing port {port}... ");
+                try
+                {
+                    using (var tcpClient = new TcpClient())
+                    {
+                        tcpClient.ReceiveTimeout = 2000;
+                        tcpClient.SendTimeout = 2000;
+                        var connectTask = tcpClient.ConnectAsync(bitaxeIp, port);
+                        if (await Task.WhenAny(connectTask, Task.Delay(2000)) == connectTask)
+                        {
+                            await connectTask;
+                            Console.WriteLine($"✓ OPEN");
+                            openPorts.Add(port);
+                            tcpClient.Close();
+                        }
+                        else
+                        {
+                            Console.WriteLine($"✗ timeout");
+                        }
+                    }
+                }
+                catch (Exception tcpEx)
+                {
+                    Console.WriteLine($"✗ closed/unreachable");
+                }
+            }
+            
+            // Even if TCP test fails, try TCP HTTP directly (like we do in production)
+            if (openPorts.Count == 0)
+            {
+                Console.WriteLine($"[TEST] No ports responded to TCP connection test");
+                Console.WriteLine($"[TEST] Trying TCP HTTP requests (raw HTTP over TCP socket)...");
+                Console.WriteLine($"[TEST] This is the same method used in production (like Nano3S)...");
+                
+                // Try TCP HTTP on ALL common ports, not just first 5
+                bool foundWorkingPort = false;
+                foreach (int port in commonPorts.Distinct())
+                {
+                    try
+                    {
+                        Console.Write($"[TEST] Trying TCP HTTP on port {port}... ");
+                        // Temporarily set port and test
+                        int originalPort = bitaxePort;
+                        bitaxePort = port;
+                        string jsonResponse = await SendBitAxeHttpRequest("/api/system/info");
+                        bitaxePort = originalPort;
+                        
+                        if (!string.IsNullOrWhiteSpace(jsonResponse) && jsonResponse.Trim().StartsWith("{"))
+                        {
+                            Console.WriteLine($"✓✓✓ SUCCESS!");
+                            Console.WriteLine($"[TEST]    Response: {jsonResponse.Length} bytes JSON");
+                            Console.WriteLine($"[TEST]    JSON preview: {jsonResponse.Substring(0, Math.Min(100, jsonResponse.Length))}...");
+                            openPorts.Add(port);
+                            foundWorkingPort = true;
+                            if (port != originalPort)
+                            {
+                                Console.WriteLine($"[TEST] ⚠⚠⚠ ACTION REQUIRED: Update bitaxePort to {port}");
+                                Console.WriteLine($"[TEST]    Option 1: Change line 28 in Program.cs: bitaxePort = {port};");
+                                Console.WriteLine($"[TEST]    Option 2: Pass as 6th argument: ... {port}");
+                            }
+                            break;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"✗ no valid JSON response");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"✗ error: {ex.Message}");
+                    }
+                }
+                
+                if (!foundWorkingPort)
+                {
+                    // Try some additional common web/API ports
+                    int[] additionalPorts = { 5001, 8081, 8889, 9001, 3001, 4000, 5000, 6000, 7000 };
+                    Console.WriteLine($"[TEST] Trying additional ports...");
+                    foreach (int port in additionalPorts)
+                    {
+                        try
+                        {
+                            Console.Write($"[TEST] Trying port {port}... ");
+                            int originalPort = bitaxePort;
+                            bitaxePort = port;
+                            string jsonResponse = await SendBitAxeHttpRequest("/api/system/info");
+                            bitaxePort = originalPort;
+                            
+                            if (!string.IsNullOrWhiteSpace(jsonResponse) && jsonResponse.Trim().StartsWith("{"))
+                            {
+                                Console.WriteLine($"✓✓✓ SUCCESS on port {port}!");
+                                openPorts.Add(port);
+                                Console.WriteLine($"[TEST] ⚠⚠⚠ ACTION REQUIRED: Update bitaxePort to {port}");
+                                break;
+                            }
+                            else
+                            {
+                                Console.WriteLine($"✗");
+                            }
+                        }
+                        catch
+                        {
+                            Console.WriteLine($"✗");
+                        }
+                    }
+                }
+            }
+            
+            if (openPorts.Count == 0)
+            {
+                Console.WriteLine($"[TEST] ✗ No open ports found on {bitaxeIp} (tried: {string.Join(", ", commonPorts.Distinct())})");
+                Console.WriteLine($"[TEST] ⚠ Possible issues:");
+                Console.WriteLine($"[TEST]   - BitAxe may be powered off");
+                Console.WriteLine($"[TEST]   - BitAxe may be on a different network/subnet");
+                Console.WriteLine($"[TEST]   - Windows Firewall may be blocking connections");
+                Console.WriteLine($"[TEST]   - BitAxe may use a very non-standard port");
+                Console.WriteLine($"[TEST]   - BitAxe may require VPN or special network configuration");
+                Console.WriteLine($"[TEST]");
+                Console.WriteLine($"[TEST] 💡 Troubleshooting tips:");
+                Console.WriteLine($"[TEST]   1. Check your phone app - what URL/port does it show for the BitAxe?");
+                Console.WriteLine($"[TEST]   2. Verify IP address is correct (check phone app settings)");
+                Console.WriteLine($"[TEST]   3. New modem/MAC change might require BitAxe to whitelist new MAC address");
+                Console.WriteLine($"[TEST]   4. Check BitAxe web interface for security/firewall settings");
+                Console.WriteLine($"[TEST]   5. Try temporarily disabling Windows Firewall");
+                Console.WriteLine($"[TEST]   6. Check router settings - some routers isolate devices");
+                Console.WriteLine($"[TEST]");
+                Console.WriteLine($"[TEST] 📱 IMPORTANT: Check your phone app settings to see:");
+                Console.WriteLine($"[TEST]   - What port number it's using to connect");
+                Console.WriteLine($"[TEST]   - If there's a URL shown (e.g., http://192.168.0.196:XXXX)");
+                Console.WriteLine($"[TEST]   - Any authentication or API key required");
+                return;
+            }
+            
+            Console.WriteLine($"[TEST] Found {openPorts.Count} open port(s): {string.Join(", ", openPorts)}");
+            Console.WriteLine($"[TEST] Testing API endpoint on open ports...");
+            
+            // Test HTTP and HTTPS on each open port
+            bool foundWorkingApi = false;
+            foreach (int port in openPorts)
+            {
+                // Try HTTP
+                try
+                {
+                    string testUrl = $"http://{bitaxeIp}:{port}/api/system/info";
+                    using (var testClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+                    {
+                        var response = await testClient.GetAsync(testUrl);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var content = await response.Content.ReadAsStringAsync();
+                            Console.WriteLine($"[TEST] ✓✓✓ API WORKING on http://{bitaxeIp}:{port}/api/system/info");
+                            Console.WriteLine($"[TEST]    Status: {(int)response.StatusCode} {response.ReasonPhrase}");
+                            Console.WriteLine($"[TEST]    Response: {content.Length} bytes");
+                            
+                            if (port != bitaxePort)
+                            {
+                                Console.WriteLine($"[TEST] ⚠⚠⚠ ACTION REQUIRED: Update bitaxePort to {port}");
+                                Console.WriteLine($"[TEST]    Option 1: Change line 27 in Program.cs: bitaxePort = {port};");
+                                Console.WriteLine($"[TEST]    Option 2: Pass as 6th argument: ... {port}");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"[TEST] ✓ Port {port} matches configured port - all good!");
+                            }
+                            foundWorkingApi = true;
+                            break;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Try HTTPS on this port
+                    try
+                    {
+                        string testUrl = $"https://{bitaxeIp}:{port}/api/system/info";
+                        using (var handler = new HttpClientHandler())
+                        {
+                            handler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true; // Accept self-signed certs
+                            using (var testClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) })
+                            {
+                                var response = await testClient.GetAsync(testUrl);
+                                if (response.IsSuccessStatusCode)
+                                {
+                                    var content = await response.Content.ReadAsStringAsync();
+                                    Console.WriteLine($"[TEST] ✓✓✓ API WORKING on https://{bitaxeIp}:{port}/api/system/info");
+                                    Console.WriteLine($"[TEST]    Status: {(int)response.StatusCode} {response.ReasonPhrase}");
+                                    Console.WriteLine($"[TEST]    Response: {content.Length} bytes");
+                                    Console.WriteLine($"[TEST] ⚠⚠⚠ BitAxe uses HTTPS - code update needed to support HTTPS");
+                                    foundWorkingApi = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Port is open but API doesn't respond - might be a different service
+                    }
+                }
+            }
+            
+            if (!foundWorkingApi)
+            {
+                Console.WriteLine($"[TEST] ✗ API endpoint /api/system/info not found on any open port");
+                Console.WriteLine($"[TEST] ⚠ Open ports found but API not responding - BitAxe may use a different API path");
+                Console.WriteLine($"[TEST] ⚠ Try accessing http://{bitaxeIp}:{openPorts[0]} in a browser to see what's available");
             }
         }
 
@@ -1316,6 +1680,16 @@ setInterval(fetchStats, refreshInterval);
                                                         stats.PoolStatus = "1";
                                                     }
                                                     break;
+                                                case "POOL BEST SHARE":
+                                                case "POOLBESTSHARE":
+                                                    if (double.TryParse(value, out double poolBestShare))
+                                                    {
+                                                        if (poolNum == 0)
+                                                        {
+                                                            stats.PoolBestShare = poolBestShare;
+                                                        }
+                                                    }
+                                                    break;
                                             }
                                         }
                                         catch { }
@@ -1392,6 +1766,39 @@ setInterval(fetchStats, refreshInterval);
                     stats.HwType = stats.Prod;
                 }
                 
+                // Track and update best difficulty (Best Share from device summary)
+                try
+                {
+                    // Update if device reports a higher Best Share value
+                    if (stats.BestShare > 0)
+                    {
+                        UpdateNano3SBestDifficulty(stats.BestShare);
+                    }
+                    
+                    // Always set the persisted best difficulty (highest value we've seen across all sessions)
+                    stats.BestDifficulty = GetNano3SBestDifficulty();
+                }
+                catch (Exception bestDiffEx)
+                {
+                    Console.WriteLine($"[WARNING] Error in best difficulty tracking: {bestDiffEx.Message}");
+                    // Don't let this break the stats return - use persisted value even on error
+                    try
+                    {
+                        stats.BestDifficulty = GetNano3SBestDifficulty();
+                    }
+                    catch
+                    {
+                        stats.BestDifficulty = 328250000.0; // Fallback to default
+                    }
+                }
+                
+                // Ensure BestDifficulty is always set (double-check before returning)
+                if (stats.BestDifficulty <= 0)
+                {
+                    stats.BestDifficulty = GetNano3SBestDifficulty();
+                    Console.WriteLine($"[WARNING] BestDifficulty was 0, reset to: {stats.BestDifficulty:F0} ({stats.BestDifficulty / 1000000.0:F2}M)");
+                }
+                
                 return stats;
             }
             catch (Exception ex)
@@ -1423,7 +1830,7 @@ setInterval(fetchStats, refreshInterval);
                 sessionDataFile = Path.Combine(tempDir, filename);
 
                 // Write header comment as first line (JSONL format supports comments via metadata)
-                string header = $"{{\"session_start\":\"{DateTime.Now:yyyy-MM-ddTHH:mm:ss.fffZ}\",\"bitaxe_ip\":\"{bitaxeIp}\",\"refresh_interval\":{refreshInterval}}}";
+                string header = $"{{\"session_start\":\"{DateTime.Now:yyyy-MM-ddTHH:mm:ss.fffZ}\",\"bitaxe_ip\":\"{bitaxeIp}\",\"bitaxe_port\":{bitaxePort},\"refresh_interval\":{refreshInterval}}}";
                 File.WriteAllText(sessionDataFile, header + Environment.NewLine);
                 
                 Console.WriteLine($"✓ Session data file created: {sessionDataFile}");
@@ -1432,6 +1839,232 @@ setInterval(fetchStats, refreshInterval);
             {
                 Console.WriteLine($"[WARNING] Failed to initialize session data file: {ex.Message}");
                 sessionDataFile = null; // Disable logging if we can't create the file
+            }
+        }
+
+        static void InitializeNano3SBestDifficulty()
+        {
+            try
+            {
+                // Store config file in the application directory (where the executable is located)
+                // This keeps it with the project and makes it easier to manage
+                string appDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                
+                // Use a persistent config file for best difficulty with history tracking
+                nano3SBestDifficultyConfigFile = Path.Combine(appDirectory, "Nano3S_BestDifficulty.txt");
+                
+                // Load existing best difficulty if file exists
+                if (File.Exists(nano3SBestDifficultyConfigFile))
+                {
+                    try
+                    {
+                        string[] lines = File.ReadAllLines(nano3SBestDifficultyConfigFile);
+                        double loadedValue = 0;
+                        
+                        // Try to read from first line (legacy format) or from "Current Best Difficulty:" line
+                        foreach (string line in lines)
+                        {
+                            if (line.StartsWith("Current Best Difficulty:"))
+                            {
+                                // New format: "Current Best Difficulty: 325250000 (325.25M)"
+                                int colonIndex = line.IndexOf(':');
+                                if (colonIndex >= 0)
+                                {
+                                    string valuePart = line.Substring(colonIndex + 1).Trim();
+                                    int spaceIndex = valuePart.IndexOf(' ');
+                                    if (spaceIndex > 0)
+                                    {
+                                        valuePart = valuePart.Substring(0, spaceIndex);
+                                    }
+                                    if (double.TryParse(valuePart, out loadedValue) && loadedValue > 0)
+                                    {
+                                        break;
+                                    }
+                                }
+                            }
+                            else if (!line.StartsWith("History:") && !line.StartsWith("---") && !string.IsNullOrWhiteSpace(line))
+                            {
+                                // Legacy format: just a number on first line
+                                if (double.TryParse(line.Trim(), out loadedValue) && loadedValue > 0)
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (loadedValue > 0)
+                        {
+                            lock (nano3SBestDifficultyLock)
+                            {
+                                // Use the higher of: loaded value or default value from variable
+                                double defaultValue = 328250000.0; // Default from static variable
+                                if (loadedValue < defaultValue)
+                                {
+                                    Console.WriteLine($"[INFO] Loaded value ({loadedValue / 1000000.0:F2}M) is lower than default ({defaultValue / 1000000.0:F2}M), using default");
+                                    nano3SBestDifficulty = defaultValue;
+                                    SaveNano3SBestDifficulty(true); // Re-save with default value
+                                }
+                                else
+                                {
+                                    nano3SBestDifficulty = loadedValue;
+                                }
+                            }
+                            Console.WriteLine($"✓ Loaded Nano 3S best difficulty: {nano3SBestDifficulty:N0} ({nano3SBestDifficulty / 1000000.0:F2}M)");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[WARNING] Could not parse best difficulty from config file, using default: 328.25M");
+                            // Initialize with default value
+                            lock (nano3SBestDifficultyLock)
+                            {
+                                nano3SBestDifficulty = 328250000.0; // Ensure default value
+                            }
+                            SaveNano3SBestDifficulty(true);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[WARNING] Failed to load best difficulty from config: {ex.Message}");
+                        Console.WriteLine($"[INFO] Using default best difficulty: {nano3SBestDifficulty / 1000000.0:F2}M");
+                        // Initialize with default value
+                        SaveNano3SBestDifficulty(true);
+                    }
+                }
+                else
+                {
+                    // Create config file with default value and initial history entry
+                    // nano3SBestDifficulty already has the default value (328250000.0) from static initialization
+                    SaveNano3SBestDifficulty(true);
+                    Console.WriteLine($"✓ Initialized Nano 3S best difficulty: {nano3SBestDifficulty / 1000000.0:F2}M");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WARNING] Failed to initialize Nano 3S best difficulty tracking: {ex.Message}");
+                Console.WriteLine($"[INFO] Using default best difficulty: {nano3SBestDifficulty / 1000000.0:F2}M");
+            }
+        }
+
+        static void SaveNano3SBestDifficulty(bool isInitialization = false, double? previousValue = null)
+        {
+            if (string.IsNullOrEmpty(nano3SBestDifficultyConfigFile))
+                return;
+
+            try
+            {
+                lock (nano3SBestDifficultyLock)
+                {
+                    StringBuilder fileContent = new StringBuilder();
+                    
+                    // Write header with current best difficulty
+                    fileContent.AppendLine($"Current Best Difficulty: {nano3SBestDifficulty:F0} ({nano3SBestDifficulty / 1000000.0:F2}M)");
+                    fileContent.AppendLine();
+                    fileContent.AppendLine("History:");
+                    fileContent.AppendLine("---");
+                    
+                    // Read existing history if file exists and this is not initialization
+                    List<string> historyLines = new List<string>();
+                    if (File.Exists(nano3SBestDifficultyConfigFile) && !isInitialization)
+                    {
+                        try
+                        {
+                            string[] existingLines = File.ReadAllLines(nano3SBestDifficultyConfigFile);
+                            bool inHistorySection = false;
+                            foreach (string line in existingLines)
+                            {
+                                if (line.StartsWith("History:"))
+                                {
+                                    inHistorySection = true;
+                                    continue;
+                                }
+                                if (inHistorySection && !line.StartsWith("Current Best Difficulty:") && !string.IsNullOrWhiteSpace(line))
+                                {
+                                    historyLines.Add(line);
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // If we can't read existing history, just start fresh
+                        }
+                    }
+                    
+                    // Add new history entry if this is an update (not initialization)
+                    if (!isInitialization && previousValue.HasValue)
+                    {
+                        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                        double oldValue = previousValue.Value;
+                        historyLines.Add($"{timestamp} - Updated: {oldValue / 1000000.0:F2}M -> {nano3SBestDifficulty / 1000000.0:F2}M ({oldValue:F0} -> {nano3SBestDifficulty:F0})");
+                    }
+                    else
+                    {
+                        // Initialization entry
+                        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                        historyLines.Add($"{timestamp} - Initialized: {nano3SBestDifficulty / 1000000.0:F2}M ({nano3SBestDifficulty:F0})");
+                    }
+                    
+                    // Write all history entries
+                    foreach (string historyLine in historyLines)
+                    {
+                        fileContent.AppendLine(historyLine);
+                    }
+                    
+                    // Write to file
+                    File.WriteAllText(nano3SBestDifficultyConfigFile, fileContent.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WARNING] Failed to save Nano 3S best difficulty: {ex.Message}");
+            }
+        }
+
+        static void LogPoolBestShareToFile(double poolBestShare)
+        {
+            if (string.IsNullOrEmpty(nano3SBestDifficultyConfigFile))
+                return;
+
+            try
+            {
+                string logLine = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - Pool Best Share received: {poolBestShare / 1000000.0:F2}M ({poolBestShare:F0})";
+                
+                // Append to end of file
+                lock (nano3SBestDifficultyLock)
+                {
+                    if (File.Exists(nano3SBestDifficultyConfigFile))
+                    {
+                        File.AppendAllText(nano3SBestDifficultyConfigFile, logLine + Environment.NewLine);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WARNING] Failed to log Pool Best Share to file: {ex.Message}");
+            }
+        }
+
+        static void UpdateNano3SBestDifficulty(double newValue)
+        {
+            if (newValue <= 0)
+                return;
+
+            lock (nano3SBestDifficultyLock)
+            {
+                if (newValue > nano3SBestDifficulty)
+                {
+                    double oldValue = nano3SBestDifficulty;
+                    nano3SBestDifficulty = newValue;
+                    SaveNano3SBestDifficulty(false, oldValue); // false = this is an update, pass old value
+                    Console.WriteLine($"[INFO] Nano 3S best difficulty updated: {oldValue / 1000000.0:F2}M -> {nano3SBestDifficulty / 1000000.0:F2}M");
+                }
+            }
+        }
+
+        static double GetNano3SBestDifficulty()
+        {
+            lock (nano3SBestDifficultyLock)
+            {
+                return nano3SBestDifficulty;
             }
         }
 
@@ -2581,6 +3214,9 @@ setInterval(fetchStats, refreshInterval);
         [JsonPropertyName("best_share")]
         public double BestShare { get; set; }
 
+        [JsonPropertyName("best_difficulty")]
+        public double BestDifficulty { get; set; } // Persisted best difficulty across sessions (from Pool Best Share)
+
         [JsonPropertyName("last_valid_work")]
         public long LastValidWork { get; set; }
 
@@ -2691,6 +3327,9 @@ setInterval(fetchStats, refreshInterval);
 
         [JsonPropertyName("pool_last_share_time")]
         public long PoolLastShareTime { get; set; }
+
+        [JsonPropertyName("pool_best_share")]
+        public double PoolBestShare { get; set; } // Best share found from pool
 
         [JsonPropertyName("pool_get_failures")]
         public long PoolGetFailures { get; set; }

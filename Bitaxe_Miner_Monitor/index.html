@@ -2363,11 +2363,22 @@
             document.getElementById('avalon-metrics-container').innerHTML = metricsHtml;
             
             // Info cards section
-            const bestShare = parseFloat(data.best_share || data.bestShare || 0);
+            // Use best_difficulty (persisted value) first, fallback to best_share only if best_difficulty is 0 or missing
+            const bestDifficultyRaw = data.best_difficulty || data.bestDifficulty;
+            const bestDifficulty = (bestDifficultyRaw !== null && bestDifficultyRaw !== undefined && bestDifficultyRaw > 0) 
+                ? parseFloat(bestDifficultyRaw) 
+                : parseFloat(data.best_share || data.bestShare || 0);
+            
+            // Format difficulty: divide by 1,000,000 to get M (millions) and format to 2 decimal places
+            const formatDifficulty = (value) => {
+                if (!value || value === 0) return '0.00 M';
+                return (value / 1000000).toFixed(2) + ' M';
+            };
+            
             const infoHtml = `
                 <div class="info-card">
                     <div class="info-label">Best Difficulty</div>
-                    <div class="info-value">${formatDifficulty(bestShare)}</div>
+                    <div class="info-value">${formatDifficulty(bestDifficulty)}</div>
                 </div>
                 <div class="info-card">
                     <div class="info-label">Accepted Shares</div>
@@ -2659,7 +2670,17 @@
             const tavg = parseInt(data.tavg || data.tAvg || 0);
             const otemp = parseInt(data.otemp || data.OTemp || 0);
             const blocksFound = parseInt(data.found_blocks || data.foundBlocks || 0);
-            const bestShare = parseFloat(data.best_share || data.bestShare || 0);
+            // Use best_difficulty (persisted value) first, fallback to best_share only if best_difficulty is 0 or missing
+            const bestDifficultyRaw = data.best_difficulty || data.bestDifficulty;
+            const bestDifficulty = (bestDifficultyRaw !== null && bestDifficultyRaw !== undefined && bestDifficultyRaw > 0) 
+                ? parseFloat(bestDifficultyRaw) 
+                : parseFloat(data.best_share || data.bestShare || 0);
+            
+            // Format difficulty: divide by 1,000,000 to get M (millions) and format to 2 decimal places
+            const formatDifficulty = (value) => {
+                if (!value || value === 0) return '0.00 M';
+                return (value / 1000000).toFixed(2) + ' M';
+            };
             
             // Calculate averages from chart data (hashrate is already in TH/s)
             let avgHashFromChart = averageHash;
@@ -2754,7 +2775,7 @@
                     <div class="metric-label">Best Difficulty</div>
                     <div class="metric-value-wrapper">
                         <div class="metric-value">
-                            ${formatDifficulty(bestShare)}
+                            ${formatDifficulty(bestDifficulty)}
                         </div>
                     </div>
                 </div>
