@@ -2369,10 +2369,13 @@
                 ? parseFloat(bestDifficultyRaw) 
                 : parseFloat(data.best_share || data.bestShare || 0);
             
-            // Format difficulty: divide by 1,000,000 to get M (millions) and format to 2 decimal places
+            // Format difficulty with proper scale: M (millions), G (billions), T (trillions)
             const formatDifficulty = (value) => {
                 if (!value || value === 0) return '0.00 M';
-                return (value / 1000000).toFixed(2) + ' M';
+                if (value >= 1e12) return (value / 1e12).toFixed(2) + ' T';
+                if (value >= 1e9) return (value / 1e9).toFixed(2) + ' G';
+                if (value >= 1e6) return (value / 1e6).toFixed(2) + ' M';
+                return value.toLocaleString();
             };
             
             const infoHtml = `
@@ -2676,10 +2679,13 @@
                 ? parseFloat(bestDifficultyRaw) 
                 : parseFloat(data.best_share || data.bestShare || 0);
             
-            // Format difficulty: divide by 1,000,000 to get M (millions) and format to 2 decimal places
+            // Format difficulty with proper scale: M (millions), G (billions), T (trillions)
             const formatDifficulty = (value) => {
                 if (!value || value === 0) return '0.00 M';
-                return (value / 1000000).toFixed(2) + ' M';
+                if (value >= 1e12) return (value / 1e12).toFixed(2) + ' T';
+                if (value >= 1e9) return (value / 1e9).toFixed(2) + ' G';
+                if (value >= 1e6) return (value / 1e6).toFixed(2) + ' M';
+                return value.toLocaleString();
             };
             
             // Calculate averages from chart data (hashrate is already in TH/s)
