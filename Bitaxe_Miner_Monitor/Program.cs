@@ -25,9 +25,9 @@ namespace Bitaxe_Miner_Monitor
             Timeout = TimeSpan.FromSeconds(30) // 30 second timeout - increased for slower connections
         };
         private static HttpClient avalonClient = null; // Separate client for Avalon Nano with cookie support
-        private static string bitaxeIp = "192.168.0.195"; // REPLACE IP HERE
+        private static string bitaxeIp = "192.168.1.139"; // REPLACE IP HERE
         private static int bitaxePort = 80; // BitAxe HTTP port (default 80, try 8080 or 8000 if 80 doesn't work)
-        private static string avalonNanoIp = "192.168.0.191"; // REPLACE IP HERE
+        private static string avalonNanoIp = "192.168.1.4"; // REPLACE IP HERE
         private static string avalonAuthCookie = "9e68bc1137fb1b797af81412f2e9c8f3"; // Auth cookie for Avalon Nano
         private static int refreshInterval = 5; // seconds
         private static HttpListener listener;
