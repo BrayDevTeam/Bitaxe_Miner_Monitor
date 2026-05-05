@@ -29,7 +29,7 @@ namespace Bitaxe_Miner_Monitor
         private static int bitaxePort = 80; // BitAxe HTTP port (default 80, try 8080 or 8000 if 80 doesn't work)
         private static string avalonNanoIp = "192.168.1.4"; // REPLACE IP HERE
         private static string avalonAuthCookie = "9e68bc1137fb1b797af81412f2e9c8f3"; // Auth cookie for Avalon Nano
-        private static int refreshInterval = 5; // seconds
+        private static int refreshInterval = 10; // seconds
         private static HttpListener listener;
         private static int webPort = 8080;
         private static string sessionDataFile = null; // Path to session data file
